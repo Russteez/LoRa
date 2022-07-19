@@ -32,19 +32,28 @@
 #include <lmic.h>
 #include <hal/hal.h>
 #include <SPI.h>
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <DHT_U.h>
+
+// DHT Sensors
+#define DHTPIN            3         // Pin which is connected to the DHT sensor.
+#define DHTTYPE           DHT22     // DHT 22 (AM2302)
+DHT_Unified dht(DHTPIN, DHTTYPE);
+uint32_t delayMS;
 
 // LoRaWAN NwkSKey, network session key
 // This is the default Semtech key, which is used by the early prototype TTN
 // network.
-static const PROGMEM u1_t NWKSKEY[16] = { 0xC0, 0x9B, 0x5F, 0x05, 0xAD, 0x28, 0xEA, 0xB4, 0x35, 0x21, 0xC8, 0xA1, 0x20, 0x9B, 0x35, 0x97 };
+static const PROGMEM u1_t NWKSKEY[16] = { 0xC7, 0xE3, 0x4B, 0xE0, 0xE5, 0x57, 0x2B, 0x30, 0x6F, 0x95, 0x26, 0x43, 0xA4, 0x75, 0xDC, 0x79 };
 
 // LoRaWAN AppSKey, application session key
 // This is the default Semtech key, which is used by the early prototype TTN
 // network.
-static const u1_t PROGMEM APPSKEY[16] = { 0x47, 0x56, 0x09, 0x14, 0xF2, 0x66, 0x3E, 0x34, 0xAD, 0x3B, 0x3E, 0xEA, 0x5C, 0xBF, 0xA9, 0x1F };
+static const u1_t PROGMEM APPSKEY[16] = { 0x08, 0x86, 0xD2, 0x16, 0xF1, 0x24, 0x41, 0x1A, 0x37, 0xA7, 0xB1, 0xC6, 0xC2, 0xE9, 0x1B, 0x34 };
 
 // LoRaWAN end-device address (DevAddr)
-static const u4_t DEVADDR = 0x260D7CED ; // <-- Change this address for every node!
+static const u4_t DEVADDR = 0x260D1381 ; // <-- Change this address for every node!
 
 // These callbacks are only used in over-the-air activation, so they are
 // left empty here (we cannot leave them out completely unless
@@ -53,12 +62,12 @@ void os_getArtEui (u1_t* buf) { }
 void os_getDevEui (u1_t* buf) { }
 void os_getDevKey (u1_t* buf) { }
 
-static uint8_t mydata[] = "Are you a fish? lol";
+static uint8_t mydata[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 static osjob_t sendjob;
 
 // Schedule TX every this many seconds (might become longer due to duty
 // cycle limitations).
-const unsigned TX_INTERVAL = 60;
+const unsigned TX_INTERVAL = 30;
 
 // Pin mapping
 const lmic_pinmap lmic_pins = {
@@ -133,14 +142,55 @@ void onEvent (ev_t ev) {
     }
 }
 
+void prepare_to_transmit(float sensor_data, String header) {
+  //dtostrf(sensor_data, 5, 2, (char*)mydata);
+  String sensor_msg;
+  sensor_msg = header + String(sensor_data);
+  Serial.println("Sending " + sensor_msg);
+  sensor_msg.toCharArray(mydata, 12);
+  LMIC_setTxData2(1, mydata, strlen((char*) mydata), 0);
+}
+
+void broadcast_dht22_data(String mode) {
+  Serial.println("Sending " + mode);
+  sensors_event_t event;
+  float sensor_data;
+
+  if (mode == "temperature") {
+    dht.temperature().getEvent(&event);
+    sensor_data = event.temperature;
+    prepare_to_transmit(sensor_data, "T");
+  } else if (mode == "humidity") {
+    dht.humidity().getEvent(&event);
+    sensor_data = event.relative_humidity;
+    prepare_to_transmit(sensor_data, "H");
+  }
+}
+
+int current_sensor = 0;
+
+void broadcast() {
+  switch (current_sensor) {
+    case 0:
+      broadcast_dht22_data("temperature");
+      current_sensor = 1;
+      break;
+    case 1:
+      broadcast_dht22_data("humidity");
+      current_sensor = 0;
+      break;
+  }
+}
+
 void do_send(osjob_t* j){
     // Check if there is not a current TX/RX job running
     if (LMIC.opmode & OP_TXRXPEND) {
         Serial.println(F("OP_TXRXPEND, not sending"));
     } else {
         // Prepare upstream data transmission at the next possible time.
-        LMIC_setTxData2(1, mydata, sizeof(mydata)-1, 0);
-        Serial.println(F("Packet queued"));
+        //LMIC_setTxData2(1, mydata, sizeof(mydata)-1, 0);
+        //Serial.println(F("Packet queued"));
+        broadcast();
     }
     // Next TX is scheduled after TX_COMPLETE event.
 }
@@ -148,6 +198,7 @@ void do_send(osjob_t* j){
 void setup() {
     Serial.begin(115200);
     Serial.println(F("Starting"));
+    dht.begin();
 
     #ifdef VCC_ENABLE
     // For Pinoccio Scout boards
@@ -223,4 +274,5 @@ void setup() {
 
 void loop() {
     os_runloop_once();
+    delay(500);
 }
